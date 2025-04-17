@@ -59,17 +59,18 @@ class OrderBase(BaseModel):
     orderType: OrderType = OrderType.LOCAL
     coID: Optional[int] = Field(None, gt=0)
     deID: Optional[int] = Field(None, gt=0)
-    materialName: Optional[str] = Field(None, max_length=100)
+    materialName: Optional[str] = Field(None, max_length=5000)
     estimatorID: Optional[int] = Field(None, gt=0)
     procedureID: Optional[int] = Field(None, gt=0)
     orderStatus: OrderStatus = OrderStatus.PENDING
-    notes: Optional[str] = Field(None, max_length=500)
+    notes: Optional[str] = Field(None, max_length=5000)
     achievedOrderDate: Optional[date] = None
-    priceRequestedDestination: Optional[str] = Field(None, max_length=100)
-    finalPrice: Optional[str] = Field(None, pattern=r'^\d+(\.\d{1,2})?$')
+    priceRequestedDestination: Optional[str] 
+    finalPrice: Optional[str] 
+    # = Field(None, pattern=r'^\d+(\.\d{1,2})?$')
     currencyType: CurrencyType = CurrencyType.LOCAL
     currentDate: Optional[date] = None
-    color: Optional[str] 
+    color: Optional[str] = None
     checkOrderLink: bool = False
     userID: int = Field(..., gt=0)
 
@@ -84,7 +85,7 @@ class OrderCreate(OrderBase):
     pass
 
 class OrderOut(OrderBase):
-    id: int
+    orderID: int  # This is the auto-generated ID
     
     class Config:
         from_attributes = True
@@ -115,9 +116,10 @@ def get_db():
     return DatabaseConnection().get_connection()
 
 # ================= DAO =================
+
 class OrderDAO:
-    def __init__(self, connection: pyodbc.Connection):
-        self.connection = connection
+    def __init__(self, db: pyodbc.Connection):
+        self.db = db  # Consistent naming - use 'db' everywhere
 
     def check_order_exists(self, orderNo: str, orderYear: str) -> None:
         """
@@ -131,7 +133,7 @@ class OrderDAO:
         params = (orderNo, orderYear)
         cursor = None
         try:
-            cursor = self.connection.cursor()
+            cursor = self.db.cursor()  # Changed from self.connection to self.db
             cursor.execute(query, params)
             result = cursor.fetchone()
             if result[0] > 0:
@@ -145,19 +147,20 @@ class OrderDAO:
         finally:
             if cursor:
                 cursor.close()
-  
 
     def insert_order(self, order: OrderCreate) -> OrderOut:
-
         # This will raise an HTTPException(409) if the order exists
         self.check_order_exists(order.orderNo, order.orderYear)
+        
+        if order.color is None:
+            order.color = STATUS_COLOR_MAP.get(order.orderStatus, "DEFAULT_COLOR")
 
         defaults = {
             'notes': order.notes or 'لا توجد ملاحظات',
             'checkOrderLink': order.checkOrderLink,
             'finalPrice': order.finalPrice or '0',
             'procedureID': order.procedureID or 1,
-            'color': STATUS_COLOR_MAP.get(order.orderStatus),
+            'color': order.color,
             'currentDate': datetime.now().date()
         }
 
@@ -182,7 +185,7 @@ class OrderDAO:
         )
 
         try:
-            with self.connection.cursor() as cursor:
+            with self.db.cursor() as cursor:  # Changed from self.connection to self.db
                 cursor.execute(insert_query, params)
                 result = cursor.fetchone()
                 
@@ -195,20 +198,62 @@ class OrderDAO:
                 columns = [column[0] for column in cursor.description]
                 order_data = dict(zip(columns, result))
 
-                #✅ Map SQL column 'orderID' to Pydantic model 'id'
-                order_data['id'] = order_data.pop('orderID')
-                self.connection.commit()
+                
+                
+                self.db.commit()  # Changed from self.connection to self.db
                 return OrderOut(**order_data)
                 
         except pyodbc.Error as e:
-            self.connection.rollback()
+            self.db.rollback()  # Changed from self.connection to self.db
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Database error: {str(e)}"
             )
 
+    def get_order_by_id(self, order_id: int) -> Optional[OrderOut]:
+        cursor = self.db.cursor()
+        query = "SELECT * FROM orderTable WHERE orderID = ?"
+        cursor.execute(query, order_id)
+        result = cursor.fetchone()
+        
+        if not result:
+            return None
+            
+        # Map all fields explicitly, handling NULL values
+        return OrderOut(
+            orderID=result.orderID,
+            orderNo=result.orderNo,
+            orderYear=result.orderYear,
+            orderDate=result.orderDate,
+            orderType=OrderType(result.orderType) if result.orderType else OrderType.LOCAL,
+            coID=result.coID if result.coID else None,
+            deID=result.deID if result.deID else None,
+            materialName=result.materialName,
+            estimatorID=result.estimatorID if result.estimatorID else None,
+            procedureID=result.procedureID if result.procedureID else None,
+            orderStatus=OrderStatus(result.orderStatus) if result.orderStatus else OrderStatus.PENDING,
+            notes=result.notes,
+            achievedOrderDate=result.achievedOrderDate,
+            priceRequestedDestination=result.priceRequestedDestination,
+            finalPrice=str(result.finalPrice) if result.finalPrice else None,
+            currencyType=CurrencyType(result.currencyType) if result.currencyType else CurrencyType.LOCAL,
+            currentDate=result.currentDate,
+            color=result.color if result.color else STATUS_COLOR_MAP.get(
+                OrderStatus(result.orderStatus) if result.orderStatus else OrderStatus.PENDING, 
+                "DEFAULT_COLOR"
+            ),
+            checkOrderLink=bool(result.checkOrderLink),
+            userID=result.userID if result.userID else None
+        )
+
+
+
+
+
+
 # ================= API Routes =================
 orders_router = APIRouter(prefix="/api/orders", tags=["orders"])
+# orders_router = APIRouter(prefix="/api/orders", tags=["orders"])
 
 @orders_router.post(
     "",
@@ -231,6 +276,37 @@ async def create_order(
             detail=str(e)
         )
 
+
+@orders_router.get("/{order_id}", response_model=OrderOut)
+async def get_order(
+    order_id: int,
+    db: pyodbc.Connection = Depends(get_db)
+):
+    try:
+        # Debug prints to verify connection
+        print(f"DB connection type: {type(db)}")
+        print(f"DB connection state: {'open' if db else 'closed'}")
+        
+        dao = OrderDAO(db)
+        order = dao.get_order_by_id(order_id)
+        
+        if not order:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Order with ID {order_id} not found"
+            )
+        return order
+        
+    except pyodbc.Error as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
 # ================= Application Setup =================
 def create_app() -> FastAPI:
     app = FastAPI(
