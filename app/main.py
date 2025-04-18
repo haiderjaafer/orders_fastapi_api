@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status,Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings
@@ -256,16 +256,21 @@ orders_router = APIRouter(prefix="/api/orders", tags=["orders"])
 # orders_router = APIRouter(prefix="/api/orders", tags=["orders"])
 
 @orders_router.post(
-    "",
+    "/add",
     response_model=OrderOut,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new order"
 )
 async def create_order(
+    request: Request,
     order_data: OrderCreate,
     db: pyodbc.Connection = Depends(get_db)
 ):
     try:
+        raw_body = await request.body()
+        print("Raw request:", raw_body.decode())
+        print("we request:")
+
         dao = OrderDAO(db)
         return dao.insert_order(order_data)
     except HTTPException:
@@ -318,9 +323,11 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000"],
-        allow_methods=["*"],
-        allow_headers=["*"]
+        allow_origins=["http://localhost:3000"],  # List of allowed origins
+        allow_credentials=True,  # This is the critical missing piece
+        allow_methods=["*"],  # Allows all methods
+        allow_headers=["*"],  # Allows all headers
+        expose_headers=["*"]  # Exposes all headers to frontend
     )
 
     app.include_router(orders_router)
