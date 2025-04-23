@@ -1,14 +1,29 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status,Request
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import date, datetime
-import pyodbc
+from sqlalchemy import create_engine, Column, Integer, String,Unicode, Date, Boolean, Enum as SQLEnum,text
+
+from sqlalchemy.orm import validates,Session  # Correct import
+from contextlib import asynccontextmanager
 import logging
-import time
 import uvicorn
+import pyodbc
+import urllib.parse
+
+
+
+from sqlalchemy.exc import SQLAlchemyError, DBAPIError
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.declarative import declarative_base
+from contextlib import contextmanager
+from typing import Generator
+
+
+
 
 # ================= Configuration =================
 class Settings(BaseSettings):
@@ -18,13 +33,49 @@ class Settings(BaseSettings):
     DATABASE_PASSWORD: str
     DATABASE_DRIVER: str = "ODBC Driver 17 for SQL Server"
     PDF_BASE_PATH: str = 'D:/order_pdfs'
-    
+
     class Config:
         env_file = ".env"
 
 settings = Settings()
 
-# ================= Models =================
+# ================= SQLAlchemy Setup =================
+params = urllib.parse.quote_plus(
+    f"DRIVER={settings.DATABASE_DRIVER};"
+    f"SERVER={settings.DATABASE_SERVER};"
+    f"DATABASE={settings.DATABASE_NAME};"
+    f"UID={settings.DATABASE_USER};"
+    f"PWD={settings.DATABASE_PASSWORD};"
+    f"TrustServerCertificate=yes;"
+    f"MARS_Connection=Yes;"
+    f"CHARSET=UTF8;"
+)
+
+SQLALCHEMY_DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
+
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"unicode_results": True},
+    fast_executemany=True,
+    echo=True , # optional for debugging
+
+    pool_size=5,
+    max_overflow=2,
+    pool_timeout=30
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ================= Database Models =================
 class OrderType(str, Enum):
     LOCAL = "محلية"
     DIRECT_LOCAL = "محلية-مباشرة"
@@ -33,25 +84,64 @@ class OrderType(str, Enum):
     EXTERNAL_MONOPOLISTIC = "خارجية-احتكارية"
 
 class OrderStatus(str, Enum):
-   
     PENDING = "قيد الانجاز"
     APPROVED = "منجز"
-    
     REJECTED = "الغيت"
 
 class CurrencyType(str, Enum):
     USD = "دولار امريكي"
     EUR = "اليورو"
-    
     LOCAL = "دينار عراقي"
 
-STATUS_COLOR_MAP = {
-    OrderStatus.APPROVED.value: "GREEN",  # green
-    OrderStatus.REJECTED.value: "RED",  # red
-    OrderStatus.PENDING.value: "YELLOW",   # yellow
-}
+class OrderDB(Base):
+    __tablename__ = "orderTable"
 
+    orderID = Column(Integer, primary_key=True, index=True)
+    orderNo = Column(String(50), nullable=False)
+    orderYear = Column(String(4), nullable=False)
+    orderDate = Column(Date, nullable=False)
+    orderType = Column(Unicode(50), nullable=False)
+    coID = Column(Integer)
+    deID = Column(Integer)
+    materialName = Column(String(5000))
+    estimatorID = Column(Integer)
+    procedureID = Column(Integer)
+    orderStatus = Column(Unicode(50), nullable=False)
+    notes = Column(String(5000))
+    achievedOrderDate = Column(Date)
+    priceRequestedDestination = Column(String(100))
+    finalPrice = Column(String(50))
+    currencyType = Column(Unicode(50), nullable=False)
+    currentDate = Column(Date)
+    color = Column(String(50))
+    checkOrderLink = Column(Boolean, default=False)
+    userID = Column(Integer, nullable=False)
 
+    @validates('orderType')
+    def validate_order_type(self, key, value):
+        try:
+            return OrderType(value).value  # Convert to enum then get Arabic value
+        except ValueError:
+            valid_values = [e.value for e in OrderType]
+            raise ValueError(f"Invalid orderType. Valid values: {valid_values}")
+    
+    @validates('orderStatus')
+    def validate_order_status(self, key, value):
+        try:
+            return OrderStatus(value).value
+        except ValueError:
+            valid_values = [e.value for e in OrderStatus]
+            raise ValueError(f"Invalid orderStatus. Valid values: {valid_values}")
+    
+    @validates('currencyType')
+    def validate_currency_type(self, key, value):
+        try:
+            return CurrencyType(value).value
+        except ValueError:
+            valid_values = [e.value for e in CurrencyType]
+            raise ValueError(f"Invalid currencyType. Valid values: {valid_values}")
+
+# ================= Pydantic Schemas =================
 class OrderBase(BaseModel):
     orderNo: str = Field(..., min_length=1)
     orderYear: str = Field(..., pattern=r'^\d{4}$')
@@ -65,198 +155,152 @@ class OrderBase(BaseModel):
     orderStatus: OrderStatus = OrderStatus.PENDING
     notes: Optional[str] = Field(None, max_length=5000)
     achievedOrderDate: Optional[date] = None
-    priceRequestedDestination: Optional[str] 
-    finalPrice: Optional[str] 
-    # = Field(None, pattern=r'^\d+(\.\d{1,2})?$')
+    priceRequestedDestination: Optional[str] = None
+    finalPrice: Optional[str] = None
     currencyType: CurrencyType = CurrencyType.LOCAL
     currentDate: Optional[date] = None
     color: Optional[str] = None
     checkOrderLink: bool = False
     userID: int = Field(..., gt=0)
 
-    @field_validator('achievedOrderDate')
-    @classmethod
-    def validate_achieved_date(cls, v: Optional[date], values: Dict[str, Any]) -> Optional[date]:
-        if v and 'orderDate' in values.data and v < values.data['orderDate']:
-            raise ValueError("Achieved date cannot be before order date")
-        return v
-
-class OrderCreate(OrderBase):
-    pass
-
-class OrderOut(OrderBase):
-    orderID: int  # This is the auto-generated ID
+    # @field_validator('achievedOrderDate')
+    # @classmethod
+    # def validate_achieved_date(cls, v: Optional[date], values: Dict[str, Any]) -> Optional[date]:
+    #     if v and 'orderDate' in values.data and v < values.data['orderDate']:
+    #         raise ValueError("Achieved date cannot be before order date")
+    #     return v
     
+    @field_validator('orderType', 'orderStatus', 'currencyType')
+    def validate_enums(cls, value, info):
+        field_name = info.field_name  # Get the field being validated
+        
+        try:
+            if field_name == 'orderType':
+                OrderType(value)
+            elif field_name == 'orderStatus':
+                OrderStatus(value)
+            elif field_name == 'currencyType':
+                CurrencyType(value)
+            return value
+        except ValueError:
+            valid_values = {
+                'orderType': [e.value for e in OrderType],
+                'orderStatus': [e.value for e in OrderStatus],
+                'currencyType': [e.value for e in CurrencyType]
+            }
+            raise ValueError(f"Invalid {field_name}. Valid options: {valid_values[field_name]}")
+   
+class OrderCreate(OrderBase):
     class Config:
         from_attributes = True
 
-# ================= Database =================
-class DatabaseConnection:
-    _instance = None
-    _connection = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            connection_string = (
-                f"DRIVER={{{settings.DATABASE_DRIVER}}};"
-                f"SERVER={settings.DATABASE_SERVER};"
-                f"DATABASE={settings.DATABASE_NAME};"
-                f"UID={settings.DATABASE_USER};"
-                f"PWD={settings.DATABASE_PASSWORD};"
-            )
-            cls._instance._connection = pyodbc.connect(connection_string)
-            cls._instance._connection.autocommit = True
-        return cls._instance
-
-    def get_connection(self):
-        return self._connection
-
-def get_db():
-    return DatabaseConnection().get_connection()
-
-# ================= DAO =================
-
-class OrderDAO:
-    def __init__(self, db: pyodbc.Connection):
-        self.db = db  # Consistent naming - use 'db' everywhere
-
-    def check_order_exists(self, orderNo: str, orderYear: str) -> None:
-        """
-        Raise HTTPException(409) if order with the given orderNo and orderYear exists.
-        """
-        query = """
-        SELECT COUNT(*) 
-        FROM [dbo].[orderTable] 
-        WHERE orderNo = ? AND orderYear = ?
-        """
-        params = (orderNo, orderYear)
-        cursor = None
-        try:
-            cursor = self.db.cursor()  # Changed from self.connection to self.db
-            cursor.execute(query, params)
-            result = cursor.fetchone()
-            if result[0] > 0:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Order with number '{orderNo}' and year '{orderYear}' already exists."
-                )
-        except pyodbc.Error as e:
-            print(f"Database error in check_order_exists: {e}")
-            raise
-        finally:
-            if cursor:
-                cursor.close()
-
-    def insert_order(self, order: OrderCreate) -> OrderOut:
-        # This will raise an HTTPException(409) if the order exists
-        self.check_order_exists(order.orderNo, order.orderYear)
-        
-        if order.color is None:
-            order.color = STATUS_COLOR_MAP.get(order.orderStatus, "DEFAULT_COLOR")
-
-        defaults = {
-            'notes': order.notes or 'لا توجد ملاحظات',
-            'checkOrderLink': order.checkOrderLink,
-            'finalPrice': order.finalPrice or '0',
-            'procedureID': order.procedureID or 1,
-            'color': order.color,
-            'currentDate': datetime.now().date()
+class OrderOut(OrderBase):
+    orderID: int
+    
+    # Add these configs
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            OrderType: lambda v: v.value,  # Return Arabic value
+            OrderStatus: lambda v: v.value,
+            CurrencyType: lambda v: v.value
         }
 
-        insert_query = """
-        INSERT INTO [dbo].[orderTable] (
-            orderNo, orderYear, orderDate, orderType, coID, deID, materialName, 
-            estimatorID, procedureID, orderStatus, notes, achievedOrderDate, 
-            priceRequestedDestination, finalPrice, currencyType, currentDate, 
-            color, checkOrderLink, userID
-        ) 
-        OUTPUT INSERTED.orderID, INSERTED.*
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """
+# ================= Dependency Setup =================
 
-        params = (
-            order.orderNo, order.orderYear, order.orderDate, order.orderType, 
-            order.coID, order.deID, order.materialName, order.estimatorID,
-            defaults['procedureID'], order.orderStatus, defaults['notes'],
-            order.achievedOrderDate, order.priceRequestedDestination, 
-            defaults['finalPrice'], order.currencyType, defaults['currentDate'],
-            defaults['color'], defaults['checkOrderLink'], order.userID
+
+# ================= Service Layer =================
+class OrderService:
+    STATUS_COLOR_MAP = {
+        OrderStatus.APPROVED: "GREEN",
+        OrderStatus.REJECTED: "RED",
+        OrderStatus.PENDING: "YELLOW"
+    }
+
+    
+    
+    @staticmethod
+    def create_order(db: Session, order: OrderCreate):
+        # Check for existing order
+        existing = db.query(OrderDB).filter(
+            OrderDB.orderNo == order.orderNo,
+            OrderDB.orderYear == order.orderYear
+        ).first()
+
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Order {order.orderNo}/{order.orderYear} already exists"
+            )
+
+        # Set default values
+        db_order = OrderDB(
+            **order.model_dump(exclude_unset=True),
+            color=order.color or OrderService.STATUS_COLOR_MAP.get(order.orderStatus),
+            currentDate=datetime.now().date()
         )
 
         try:
-            with self.db.cursor() as cursor:  # Changed from self.connection to self.db
-                cursor.execute(insert_query, params)
-                result = cursor.fetchone()
-                
-                if not result:
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Failed to retrieve inserted order details"
-                    )
-                
-                columns = [column[0] for column in cursor.description]
-                order_data = dict(zip(columns, result))
+            db.add(db_order)
+            db.commit()
+            db.refresh(db_order)
 
-                
-                
-                self.db.commit()  # Changed from self.connection to self.db
-                return OrderOut(**order_data)
-                
-        except pyodbc.Error as e:
-            self.db.rollback()  # Changed from self.connection to self.db
+            # 🟡 Convert problematic Enum fields from string to Enum (for response validation)
+            response_data = db_order.__dict__.copy()
+
+            response_data["orderType"] = OrderType(response_data["orderType"])
+            response_data["orderStatus"] = OrderStatus(response_data["orderStatus"])
+            response_data["currencyType"] = CurrencyType(response_data["currencyType"])
+
+            # Return correct response schema
+            return OrderOut(**response_data)
+
+        except Exception as e:
+            db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Database error: {str(e)}"
             )
 
-    def get_order_by_id(self, order_id: int) -> Optional[OrderOut]:
-        cursor = self.db.cursor()
-        query = "SELECT * FROM orderTable WHERE orderID = ?"
-        cursor.execute(query, order_id)
-        result = cursor.fetchone()
-        
-        if not result:
-            return None
+    
+    @staticmethod
+    def get_order(db: Session, order_id: int) -> OrderOut:
+        try:
+            # Get the raw database row
+            result = db.execute(
+                text("SELECT * FROM orderTable WHERE orderID = :id"),
+                {"id": order_id}
+            ).mappings().first()
             
-        # Map all fields explicitly, handling NULL values
-        return OrderOut(
-            orderID=result.orderID,
-            orderNo=result.orderNo,
-            orderYear=result.orderYear,
-            orderDate=result.orderDate,
-            orderType=OrderType(result.orderType) if result.orderType else OrderType.LOCAL,
-            coID=result.coID if result.coID else None,
-            deID=result.deID if result.deID else None,
-            materialName=result.materialName,
-            estimatorID=result.estimatorID if result.estimatorID else None,
-            procedureID=result.procedureID if result.procedureID else None,
-            orderStatus=OrderStatus(result.orderStatus) if result.orderStatus else OrderStatus.PENDING,
-            notes=result.notes,
-            achievedOrderDate=result.achievedOrderDate,
-            priceRequestedDestination=result.priceRequestedDestination,
-            finalPrice=str(result.finalPrice) if result.finalPrice else None,
-            currencyType=CurrencyType(result.currencyType) if result.currencyType else CurrencyType.LOCAL,
-            currentDate=result.currentDate,
-            color=result.color if result.color else STATUS_COLOR_MAP.get(
-                OrderStatus(result.orderStatus) if result.orderStatus else OrderStatus.PENDING, 
-                "DEFAULT_COLOR"
-            ),
-            checkOrderLink=bool(result.checkOrderLink),
-            userID=result.userID if result.userID else None
-        )
+            if not result:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Order {order_id} not found"
+                )
+                
+            
+            order_data = dict(result)
+
+# Fixing corrupted enum fields manually
+            order_data['orderType'] = OrderType(order_data['orderType'])
+            order_data['orderStatus'] = OrderStatus(order_data['orderStatus'])
+            order_data['currencyType'] = CurrencyType(order_data['currencyType'])
+
+            return OrderOut(**order_data)
 
 
-
-
-
+            
+        except SQLAlchemyError as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Database error: {str(e)}"
+            )
 
 # ================= API Routes =================
 orders_router = APIRouter(prefix="/api/orders", tags=["orders"])
-# orders_router = APIRouter(prefix="/api/orders", tags=["orders"])
 
 @orders_router.post(
-    "/add",
+    "",
     response_model=OrderOut,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new order"
@@ -264,70 +308,58 @@ orders_router = APIRouter(prefix="/api/orders", tags=["orders"])
 async def create_order(
     request: Request,
     order_data: OrderCreate,
-    db: pyodbc.Connection = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     try:
-        raw_body = await request.body()
-        print("Raw request:", raw_body.decode())
-        print("we request:")
-
-        dao = OrderDAO(db)
-        return dao.insert_order(order_data)
-    except HTTPException:
-        raise
+        created_order = OrderService.create_order(db, order_data)
+        return created_order
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
-
 
 @orders_router.get("/{order_id}", response_model=OrderOut)
-async def get_order(
+def get_order(
     order_id: int,
-    db: pyodbc.Connection = Depends(get_db)
+    db: Session = Depends(get_db)  # Correct dependency injection
 ):
     try:
-        # Debug prints to verify connection
-        print(f"DB connection type: {type(db)}")
-        print(f"DB connection state: {'open' if db else 'closed'}")
-        
-        dao = OrderDAO(db)
-        order = dao.get_order_by_id(order_id)
-        
-        if not order:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Order with ID {order_id} not found"
-            )
-        return order
-        
-    except pyodbc.Error as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error: {str(e)}"
-        )
+        print("get order")
+        return OrderService.get_order(db, order_id)
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
 # ================= Application Setup =================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create database tables (only for development)
+    Base.metadata.create_all(bind=engine)
+    yield
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Orders API",
         version="1.0.0",
         docs_url="/api/docs",
-        redoc_url="/api/redoc"
+        redoc_url="/api/redoc",
+        lifespan=lifespan
     )
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000"],  # List of allowed origins
-        allow_credentials=True,  # This is the critical missing piece
-        allow_methods=["*"],  # Allows all methods
-        allow_headers=["*"],  # Allows all headers
-        expose_headers=["*"]  # Exposes all headers to frontend
+        allow_origins=["http://localhost:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"]
     )
 
     app.include_router(orders_router)
@@ -341,4 +373,4 @@ def create_app() -> FastAPI:
 app = create_app()
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
