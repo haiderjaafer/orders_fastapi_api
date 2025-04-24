@@ -112,7 +112,7 @@ class OrderDB(Base):
     priceRequestedDestination = Column(String(100))
     finalPrice = Column(String(50))
     currencyType = Column(Unicode(50), nullable=False)
-    currentDate = Column(Date)
+    cunnrentDate = Column(Date)
     color = Column(String(50))
     checkOrderLink = Column(Boolean, default=False)
     userID = Column(Integer, nullable=False)
@@ -158,7 +158,7 @@ class OrderBase(BaseModel):
     priceRequestedDestination: Optional[str] = None
     finalPrice: Optional[str] = None
     currencyType: CurrencyType = CurrencyType.LOCAL
-    currentDate: Optional[date] = None
+    cunnrentDate: Optional[date] = None
     color: Optional[str] = None
     checkOrderLink: bool = False
     userID: int = Field(..., gt=0)
@@ -237,7 +237,7 @@ class OrderService:
         db_order = OrderDB(
             **order.model_dump(exclude_unset=True),
             color=order.color or OrderService.STATUS_COLOR_MAP.get(order.orderStatus),
-            currentDate=datetime.now().date()
+            cunnrentDate=datetime.now().date()
         )
 
         try:
