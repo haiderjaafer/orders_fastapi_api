@@ -57,7 +57,7 @@ engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
     connect_args={"unicode_results": True},
     fast_executemany=True,
-    echo=True , # optional for debugging
+    echo=False , # optional for debugging
 
     pool_size=5,
     max_overflow=2,
@@ -92,6 +92,64 @@ class CurrencyType(str, Enum):
     USD = "دولار امريكي"
     EUR = "اليورو"
     LOCAL = "دينار عراقي"
+
+class CommitteeDB(Base):
+    __tablename__ = "ComTB"
+
+    coID = Column(Unicode(50), primary_key=True, index=True)
+    Com = Column(Unicode(255), nullable=False)
+
+class CommitteeOut(BaseModel):
+    coID: str
+    Com: str
+
+    class Config:
+        from_attributes = True  # so SQLAlchemy model can be directly returned
+
+#1. Department model
+class DepartmentDB(Base):
+    __tablename__ = "DepTB"
+
+    deID = Column(Integer, primary_key=True, index=True)
+    Dep = Column(String(250), nullable=True)
+    coID = Column(Integer, nullable=True)
+
+
+# 2. Pydantic Schema
+class DepartmentOut(BaseModel):
+    deID: int
+    Dep: str
+    coID: int
+
+    class Config:
+        from_attributes = True
+
+
+class EstimatorDB(Base):
+    __tablename__ = "estimatorsTable"
+
+    estimatorID = Column(Integer, primary_key=True, index=True)
+    estimatorName = Column(String(100))
+    startDate = Column(Date)
+    endDate = Column(Date)
+    estimatorStatus = Column(Boolean)
+    coID = Column(Integer)
+    deID = Column(Integer)
+
+
+class EstimatorOut(BaseModel):
+    # estimatorID: int
+    estimatorName: str                # will return only estimatorName as response or if want to getback all properties 
+    # startDate: date | None = None
+    # endDate: date | None = None
+    # estimatorStatus: bool | None = None
+    # coID: int | None = None
+    # deID: int | None = None
+
+    class Config:
+        from_attributes = True
+
+
 
 class OrderDB(Base):
     __tablename__ = "orderTable"
@@ -295,6 +353,34 @@ class OrderService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Database error: {str(e)}"
             )
+        
+
+
+class CommitteeService:
+    @staticmethod
+    def get_all_committees(db: Session) -> List[CommitteeOut]:
+        try:
+            print("committees")
+            committees = db.query(CommitteeDB).all()
+           # return [CommitteeOut.from_orm(c) for c in committees]
+            return [CommitteeOut.model_validate(com) for com in committees]
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error fetching committees: {str(e)}")
+
+
+class DepartmentService:
+    @staticmethod
+    def get_departments_by_committee(db: Session, co_id: int):
+        return db.query(DepartmentDB).filter(DepartmentDB.coID == co_id).all()
+    
+
+
+class EstimatorService:
+    @staticmethod
+    def get_all_estimators(db: Session):
+        return db.query(EstimatorDB).all()
+
 
 # ================= API Routes =================
 orders_router = APIRouter(prefix="/api/orders", tags=["orders"])
@@ -336,6 +422,32 @@ def get_order(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+    
+
+
+
+
+committee_router = APIRouter(prefix="/api/committees", tags=["committees"])
+
+
+@committee_router.get("", response_model=List[CommitteeOut])
+def list_committees(db: Session = Depends(get_db)):
+    return CommitteeService.get_all_committees(db)
+
+
+department_router = APIRouter(prefix="/api/departments", tags=["departments"])
+
+@department_router.get("/by-committee/{co_id}", response_model=List[DepartmentOut])
+def get_departments_by_committee(co_id: int, db: Session = Depends(get_db)):
+    return DepartmentService.get_departments_by_committee(db, co_id)
+
+
+estimator_router = APIRouter(prefix="/api/estimators", tags=["estimators"])
+
+@estimator_router.get("/", response_model=List[EstimatorOut])
+def get_all_estimators(db: Session = Depends(get_db)):
+    return EstimatorService.get_all_estimators(db)
+
 
 # ================= Application Setup =================
 @asynccontextmanager
@@ -363,6 +475,9 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(orders_router)
+    app.include_router(committee_router)
+    app.include_router(department_router)
+    app.include_router(estimator_router)
 
     @app.get("/api/health")
     async def health_check():
