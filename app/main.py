@@ -14,6 +14,8 @@ import uvicorn
 import pyodbc
 import urllib.parse
 import os
+import sqlalchemy
+
 
 
 
@@ -125,6 +127,25 @@ class DepartmentOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+
+class EstimatorCreate(BaseModel):
+    estimatorName: str
+    startDate: Optional[date] = None
+    endDate: Optional[date] = None
+    estimatorStatus: bool
+    coID: int
+    deID: int
+
+    @field_validator('startDate', 'endDate', mode='before')
+    def validate_date_format(cls, value):
+        if value is None or isinstance(value, date):
+            return value
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            raise ValueError("Date must be in YYYY-MM-DD format")
 
 
 class EstimatorDB(Base):
@@ -393,7 +414,46 @@ class EstimatorService:
     @staticmethod
     def get_all_estimators(db: Session):
         return db.query(EstimatorDB).all()
-    
+
+
+
+    @staticmethod
+    def insert_estimator(db: Session, estimator: EstimatorCreate) -> int:
+        try:
+            query = text("""
+                INSERT INTO estimatorsTable (
+                    estimatorName, 
+                    startDate, 
+                    endDate, 
+                    estimatorStatus, 
+                    coID, 
+                    deID
+                ) 
+                OUTPUT INSERTED.estimatorID
+                VALUES (:estimatorName, :startDate, :endDate, :estimatorStatus, :coID, :deID)
+            """)
+            params = {
+                "estimatorName": estimator.estimatorName,
+                "startDate": estimator.startDate,
+                "endDate": estimator.endDate,
+                "estimatorStatus": estimator.estimatorStatus,
+                "coID": estimator.coID,
+                "deID": estimator.deID
+            }
+
+            result = db.execute(query, params)
+            estimator_id = result.scalar()  # ✅ .scalar() to get single value correctly
+            db.commit()
+
+            if estimator_id is None:
+                raise ValueError("Failed to retrieve estimatorID after insert")
+
+            return estimator_id
+        
+        except Exception as e:
+            db.rollback()
+            raise e
+
 
 
 class PdfService:
@@ -513,6 +573,28 @@ estimator_router = APIRouter(prefix="/api/estimators", tags=["estimators"])
 def get_all_estimators(db: Session = Depends(get_db)):
     return EstimatorService.get_all_estimators(db)
 
+routerAddEstimators = APIRouter(
+    prefix="/api/estimators",
+    tags=["Estimators"]
+)
+
+@routerAddEstimators.post("/", status_code=201)
+async def create_estimator(estimator: EstimatorCreate, db: Session = Depends(get_db)):
+    try:
+        estimator_id = EstimatorService.insert_estimator(db, estimator)
+        return {
+            "message": "Estimator created successfully",
+            "estimatorID": estimator_id
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except sqlalchemy.exc.SQLAlchemyError as e:
+        print(f"Database error: {str(e)}")  # Print the real DB error
+        raise HTTPException(status_code=500, detail="Database operation failed")
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")  # Also print general unexpected errors
+        raise HTTPException(status_code=500, detail="An unexpected error occurred")
+
 
 
 router = APIRouter(prefix="/api/pdfs", tags=["pdfs"])
@@ -586,7 +668,8 @@ def create_app() -> FastAPI:
     app.include_router(committee_router)
     app.include_router(department_router)
     app.include_router(estimator_router)
-    app.include_router(router)
+    app.include_router(router)   
+    app.include_router(routerAddEstimators)   
 
     @app.get("/api/health")
     async def health_check():
