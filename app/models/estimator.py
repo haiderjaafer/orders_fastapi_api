@@ -38,13 +38,13 @@ class EstimatorCreate(BaseModel):
 
 
 class EstimatorOut(BaseModel):
-    # estimatorID: int
+    estimatorID: int
     estimatorName: str                # will return only estimatorName as response or if want to getback all properties 
-    # startDate: date | None = None
-    # endDate: date | None = None
-    # estimatorStatus: bool | None = None
-    # coID: int | None = None
-    # deID: int | None = None
+    startDate: date | None = None
+    endDate: date | None = None
+    estimatorStatus: bool | None = None
+    coID: int | None = None
+    deID: int | None = None
 
     class Config:
         from_attributes = True

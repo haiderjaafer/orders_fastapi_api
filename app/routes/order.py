@@ -67,23 +67,8 @@ def get_order(
         )
 
 
-# Add this to your FastAPI router
-# @orders_router.get("/check-order-exists")
-# async def check_order_exists(
-#     orderNo: str = Query(..., regex="^\d+$"),  # Only numbers allowed
-#     orderYear: str = Query(...),
-#     db: Session = Depends(get_db)
-# ):
-#     try:
-#         existing = db.query(OrderDB).filter(
-#             OrderDB.orderNo == orderNo,
-#             OrderDB.orderYear == orderYear
-#         ).first()
-#         return {"exists": existing is not None}
-#     except Exception as e:
-#         raise HTTPException(
-#             status_code=400,
-#             detail=f"Validation error: {str(e)}"
-#         )
+
+
+# git push --force origin main   will force push if remote repository has changes that not pulled or existed in locally
 
 
