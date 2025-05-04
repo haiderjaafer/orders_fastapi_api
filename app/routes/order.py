@@ -1,6 +1,6 @@
-from fastapi import  APIRouter, Depends, HTTPException, status, Request 
+from fastapi import  APIRouter, Depends, HTTPException, status, Request ,Query
 from sqlalchemy.orm import Session  
-from app.models.order import OrderCreate,OrderOut
+from app.models.order import OrderCreate,OrderOut,OrderDB
 from app.database.database import get_db
 from app.services.order import OrderService
 
@@ -33,6 +33,23 @@ async def create_order(
             detail=str(e)
         )
 
+
+
+@orders_router.get("/check-order-exists")
+def check_order_exists(
+    orderNo: str = Query(..., alias="orderNo"),
+    orderYear: str = Query(..., alias="orderYear"),
+    db: Session = Depends(get_db)
+):
+    order = db.query(OrderDB).filter(
+        OrderDB.orderNo == orderNo,
+        OrderDB.orderYear == orderYear
+    ).first()
+
+    return {"exists": bool(order)}
+
+
+
 @orders_router.get("/{order_id}", response_model=OrderOut)
 def get_order(
     order_id: int,
@@ -48,5 +65,25 @@ def get_order(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
-    
+
+
+# Add this to your FastAPI router
+# @orders_router.get("/check-order-exists")
+# async def check_order_exists(
+#     orderNo: str = Query(..., regex="^\d+$"),  # Only numbers allowed
+#     orderYear: str = Query(...),
+#     db: Session = Depends(get_db)
+# ):
+#     try:
+#         existing = db.query(OrderDB).filter(
+#             OrderDB.orderNo == orderNo,
+#             OrderDB.orderYear == orderYear
+#         ).first()
+#         return {"exists": existing is not None}
+#     except Exception as e:
+#         raise HTTPException(
+#             status_code=400,
+#             detail=f"Validation error: {str(e)}"
+#         )
+
 
