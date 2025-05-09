@@ -99,7 +99,7 @@ class OrderBase(BaseModel):
     currencyType: CurrencyType = CurrencyType.LOCAL
     cunnrentDate: Optional[date] = None
     color: Optional[str] = None
-    checkOrderLink: bool = False
+    checkOrderLink: Optional[bool] = False
     userID: int = Field(..., gt=0)
 
     # @field_validator('achievedOrderDate')

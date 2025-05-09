@@ -642,12 +642,18 @@ from typing import Generator
 # ================= Application Setup =================
 
 from app.database.database import engine,Base
+from app.database.config import settings
+
+
+# all routes imports
 from app.routes.order import orders_router
 from app.routes.committee import committee_router
 from app.routes.department import department_router
 from app.routes.estimator import estimatorRouter
 from app.routes.pdf import routerPdf
-from app.database.config import settings
+
+from app.routes.procedure import procedureRouter
+
 
 
 
@@ -685,7 +691,8 @@ def create_app() -> FastAPI:
     app.include_router(committee_router)
     app.include_router(department_router)
     app.include_router( estimatorRouter )
-    app.include_router(routerPdf)   
+    app.include_router(routerPdf)  
+    app.include_router(procedureRouter)   
       
 
  
