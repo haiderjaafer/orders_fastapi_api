@@ -12,6 +12,11 @@ engine = create_engine(
     pool_timeout=30
 )
 
+
+#print("Using DB URL:", settings.sqlalchemy_database_url)
+
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

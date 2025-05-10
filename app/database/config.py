@@ -1,11 +1,6 @@
 from pydantic_settings import BaseSettings
-
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.ext.declarative import declarative_base
-
-from typing import Generator
 import urllib.parse
-from sqlalchemy import create_engine
+
 
 
 
