@@ -5,6 +5,10 @@ from app.models.order import OrderCreate
 
 from datetime import  datetime
 from sqlalchemy import text
+from sqlalchemy import select
+from typing import List
+
+
 
 from sqlalchemy.orm import Session  # Correct import
 from sqlalchemy.exc import SQLAlchemyError
@@ -66,34 +70,76 @@ class OrderService:
 
     
     @staticmethod
-    def get_order(db: Session, order_id: int) -> OrderOut:
-        try:
-            # Get the raw database row
-            result = db.execute(
-                text("SELECT * FROM orderTable WHERE orderID = :id"),
-                {"id": order_id}
-            ).mappings().first()
-            
-            if not result:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Order {order_id} not found"
-                )
-                
-            
-            order_data = dict(result)
+    def getAllOrderByOrderNo(db: Session, order_no: str) -> List[OrderOut]:
+        stmt = (
+            select(OrderDB)
+            .where(OrderDB.orderNo == order_no)
+            .order_by(OrderDB.orderYear.desc())  # Optional: sort by most recent year
+        )
 
-# Fixing corrupted enum fields manually
-            order_data['orderType'] = OrderType(order_data['orderType'])
-            order_data['orderStatus'] = OrderStatus(order_data['orderStatus'])
-            order_data['currencyType'] = CurrencyType(order_data['currencyType'])
+        results = db.scalars(stmt).all()
 
-            return OrderOut(**order_data)
-
-
-            
-        except SQLAlchemyError as e:
+        if not results:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error: {str(e)}"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No orders found for order number {order_no}"
             )
+
+        
+        return [OrderOut.model_validate(order) for order in results] 
+
+
+
+    # def getAllOrderByOrderNo(db: Session, order_no: str) -> List[OrderOut]:
+    #     try:
+    #         result = db.execute(
+    #             text("SELECT * FROM orderTable WHERE orderNo = :order_no"),
+    #             {"order_no": order_no}
+    #         ).mappings().all()  # Use `.all()` instead of `.first()` to get multiple rows
+
+    #         if not result:
+    #             raise HTTPException(
+    #                 status_code=status.HTTP_404_NOT_FOUND,
+    #                 detail=f"No orders found for orderNo {order_no}"
+    #             )
+
+    #         orders = []
+    #         for row in result:
+    #             order_data = dict(row)
+    #             order_data['orderType'] = OrderType(order_data['orderType'])
+    #             order_data['orderStatus'] = OrderStatus(order_data['orderStatus'])
+    #             order_data['currencyType'] = CurrencyType(order_data['currencyType'])
+
+    #             orders.append(OrderOut(**order_data))
+
+    #         return orders
+
+    #     except Exception as e:
+    #         raise HTTPException(
+    #             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    #             detail=str(e)
+    #         )
+
+
+
+
+    @staticmethod
+    def getAllorderNo(db: Session):
+        stmt = (
+            select(OrderDB.orderNo)
+            .group_by(OrderDB.orderNo)
+            .order_by(OrderDB.orderNo)
+           # .limit(100)
+        )
+        result = db.execute(stmt).scalars().all()
+        return result
+    
+
+    # def getAllorderNo(db: Session):   // this also worked
+    #     query = text("""
+    #         SELECT DISTINCT TOP 100 orderNo
+    #         FROM dbo.orderTable
+    #         ORDER BY orderNo
+    #     """)
+    #     result = db.execute(query).scalars().all()
+    #     return result

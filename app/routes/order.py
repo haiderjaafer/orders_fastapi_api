@@ -1,8 +1,10 @@
+from typing import List
 from fastapi import  APIRouter, Depends, HTTPException, status, Request ,Query
 from sqlalchemy.orm import Session  
 from app.models.order import OrderCreate,OrderOut,OrderDB
 from app.database.database import get_db
 from app.services.order import OrderService
+
 
 
 
@@ -50,14 +52,23 @@ def check_order_exists(
 
 
 
-@orders_router.get("/{order_id}", response_model=OrderOut)
+
+@orders_router.get("/getAll", response_model=list[str])
+def fetchOrderNo(db: Session = Depends(get_db)):
+    return OrderService.getAllorderNo(db)
+
+
+
+
+
+@orders_router.get("/{order_id}", response_model=List[OrderOut])
 def get_order(
-    order_id: int,
+    order_id: str,
     db: Session = Depends(get_db)  # Correct dependency injection
 ):
     try:
-        print("get order")
-        return OrderService.get_order(db, order_id)
+        print(f"get order{order_id}")
+        return OrderService.getAllOrderByOrderNo(db, order_id)
     except HTTPException as he:
         raise he
     except Exception as e:
@@ -65,6 +76,7 @@ def get_order(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+
 
 
 

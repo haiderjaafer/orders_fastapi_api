@@ -133,15 +133,35 @@ class OrderCreate(OrderBase):
     class Config:
         from_attributes = True
 
-class OrderOut(OrderBase):
+
+
+class OrderOut(BaseModel):
     orderID: int
+    orderNo: str
+    orderYear: str
+    orderDate: date
+    orderType: OrderType
+    coID: int
+    deID: int
+    materialName: str
+    estimatorID: int
+    procedureID: int
+    orderStatus: OrderStatus
+    notes: str
+    achievedOrderDate: date
+    priceRequestedDestination: str
+    finalPrice: str
+    currencyType: CurrencyType
+    cunnrentDate: date
+    color: str
+    checkOrderLink: bool
+    userID: int
+
+    model_config = {
+        "from_attributes": True
+    }
+
     
-    # Add these configs
-    class Config:
-        from_attributes = True
-        json_encoders = {
-            OrderType: lambda v: v.value,  # Return Arabic value
-            OrderStatus: lambda v: v.value,
-            CurrencyType: lambda v: v.value
-        }
+    
+
 
