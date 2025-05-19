@@ -1,6 +1,8 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.database.config import settings
+from sqlalchemy.exc import OperationalError
+
 
 engine = create_engine(
     settings.sqlalchemy_database_url,
@@ -24,5 +26,7 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except OperationalError as e:
+        raise ConnectionError("Could not connect to SQL Server") from e    
     finally:
         db.close()
