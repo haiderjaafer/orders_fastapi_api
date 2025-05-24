@@ -1,7 +1,7 @@
-from typing import List
+from typing import List, Optional
 from fastapi import  APIRouter, Depends, HTTPException, status, Request ,Query
 from sqlalchemy.orm import Session  
-from app.models.order import OrderCreate,OrderOut,OrderDB
+from app.models.order import OrderCreate,OrderOut,OrderDB, PaginatedOrderOut
 from app.database.database import get_db
 from app.services.order import OrderService
 
@@ -52,12 +52,22 @@ def check_order_exists(
 
 
 
+@orders_router.get("/getAll", response_model=PaginatedOrderOut)
+def get_orders(
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100),
+    orderStatus: Optional[str] = Query(None, enum=["منجز", "قيد الانجاز", "الغيت"])  # Add orderStatus
+):
+    return OrderService.getAllorderNo(db, page, limit, orderStatus)  # Pass orderStatus
 
-@orders_router.get("/getAll", response_model=list[str])
-def fetchOrderNo(db: Session = Depends(get_db)):
-    return OrderService.getAllorderNo(db)
 
 
+
+
+@orders_router.get("/getAllForComobox", response_model=list[str])
+def getAllForComobox(db: Session = Depends(get_db)):
+    return OrderService.getAll(db)
 
 
 
